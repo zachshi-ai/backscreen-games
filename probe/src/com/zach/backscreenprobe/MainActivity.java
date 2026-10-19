@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.IBinder;
 import android.os.Parcel;
+import android.os.Vibrator;
 import android.provider.MediaStore;
 import android.view.View;
 import android.view.ViewGroup;
@@ -22,19 +23,19 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * 用 AIDL 异常回执做签名探针：
- * 给每个 transaction 发「宽/高/位图」结构，返回里不带 "Parcel data not fully consumed"
- * 且不带其它异常的，就是真正接受位图参数的方法。
+ * 真正推帧：对已确认吞下 (int 宽, int 高, byte[] 位图) 的 code 5 / 11 下发
+ * 全亮-全灭交替图案，覆盖多种分辨率，配合已开启的背屏观察。
  */
 public class MainActivity extends Activity {
 
-    private static final String[][] SVCS = {
-            {"display_ext", "android.hardware.display.IStepOSDisplayManager"},
-            {"stepos_device_control", "android.hardware.display.IStepOSDeviceControlService"}
-    };
+    private static final String SVC = "display_ext";
+    private static final String DESC = "android.hardware.display.IStepOSDisplayManager";
+    private static final int[] SIZES = {8, 16, 24, 32, 40, 48, 64};
 
     private TextView logView;
+    private TextView statusView;
     private String report = "";
+    private IBinder binder;
     private volatile boolean running = false;
 
     @Override
@@ -47,10 +48,23 @@ public class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("签名探针 · 找收画面的方法");
+        title.setText("点阵推帧测试");
         title.setTextColor(0xFF4FF0C0);
-        title.setTextSize(17);
+        title.setTextSize(18);
         root.addView(title);
+
+        TextView warn = new TextView(this);
+        warn.setText("先确认背屏已经点亮（设置里打开背屏 / 点亮一次），再点下面的按钮。");
+        warn.setTextColor(0xFFFFD54A);
+        warn.setTextSize(12.5f);
+        warn.setPadding(0, dp(6), 0, dp(2));
+        root.addView(warn);
+
+        statusView = new TextView(this);
+        statusView.setTextColor(0xFFFFD54A);
+        statusView.setTextSize(14);
+        statusView.setText("待开始");
+        root.addView(statusView);
 
         logView = new TextView(this);
         logView.setTextColor(0xFFE8E8F0);
@@ -61,7 +75,7 @@ public class MainActivity extends Activity {
         root.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         Button run = new Button(this);
-        run.setText("开始（盯着背屏）");
+        run.setText("开始推帧（盯背屏）");
         run.setAllCaps(false);
         run.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { start(); }
@@ -69,56 +83,80 @@ public class MainActivity extends Activity {
         root.addView(run);
 
         setContentView(root);
+        bind();
     }
 
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
+    private void bind() {
+        try {
+            Class<?> smc = Class.forName("android.os.ServiceManager");
+            Method get = smc.getMethod("getService", String.class);
+            Object o = get.invoke(null, SVC);
+            if (o instanceof IBinder) binder = (IBinder) o;
+            StringBuilder sb = new StringBuilder("binder=" + (binder == null ? "null" : "OK"));
+            try {
+                Object dot = get.invoke(null, "vendor.stepos.hardware.dot_matrix.IDotMatrix/default");
+                sb.append("  IDotMatrix=").append(dot == null ? "null" : "OK");
+            } catch (Throwable ignored) { }
+            append(sb.toString());
+        } catch (Throwable t) {
+            append("bind 失败 " + t);
+        }
+    }
+
     private void start() {
         if (running) return;
+        if (binder == null) { bind(); if (binder == null) return; }
         running = true;
         new Thread(new Runnable() {
             @Override public void run() {
-                for (String[] s : SVCS) scan(s[0], s[1]);
-                append("\n=== 完成 ===");
+                for (int size : SIZES) {
+                    for (int code : new int[]{5, 11, 12}) {
+                        if (!running) break;
+                        for (int on = 1; on >= 0; on--) {
+                            final String label = "size=" + size + " code=" + code + (on == 1 ? " 全亮" : " 全灭");
+                            runOnUiThread(new Runnable() {
+                                @Override public void run() { statusView.setText(label); }
+                            });
+                            buzz(on == 1 ? 40 : 20);
+                            String r = push(code, size, on == 1);
+                            append(label + " -> " + r);
+                            try { Thread.sleep(900); } catch (InterruptedException ignored) { }
+                        }
+                    }
+                }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { statusView.setText("推帧结束"); }
+                });
+                append("=== 结束 ===");
                 running = false;
             }
         }).start();
     }
 
-    private void scan(String svc, String desc) {
-        append("\n##### " + svc + " #####");
-        IBinder b;
-        try {
-            Class<?> smc = Class.forName("android.os.ServiceManager");
-            Method get = smc.getMethod("getService", String.class);
-            Object o = get.invoke(null, svc);
-            if (!(o instanceof IBinder)) { append("binder null"); return; }
-            b = (IBinder) o;
-        } catch (Throwable t) {
-            append("bind 失败 " + t);
-            return;
-        }
-        for (int code = 1; code <= 40; code++) {
-            String v1 = probe(b, desc, code, 1);
-            String v2 = probe(b, desc, code, 2);
-            String line = "code=" + code + " | A:" + v1 + " | B:" + v2;
-            append(line);
-            try { Thread.sleep(100); } catch (InterruptedException ignored) { }
-        }
-    }
-
-    /** variant 1 = (32,32,byte[128]) ; 2 = (byte[128]) */
-    private String probe(IBinder b, String desc, int code, int variant) {
+    private String push(int code, int size, boolean on) {
         Parcel d = Parcel.obtain();
         Parcel r = Parcel.obtain();
         try {
-            byte[] on = new byte[128];
-            for (int i = 0; i < on.length; i++) on[i] = (byte) 0xFF;
-            d.writeInterfaceToken(desc);
-            if (variant == 1) { d.writeInt(32); d.writeInt(32); }
-            d.writeByteArray(on);
-            b.transact(code, d, r, 0);
-            return describe(r);
+            int bytes = Math.max(1, (size * size + 7) / 8);
+            byte[] buf = new byte[bytes];
+            for (int i = 0; i < bytes; i++) buf[i] = (byte) (on ? 0xFF : 0x00);
+            d.writeInterfaceToken(DESC);
+            if (code != 12) { d.writeInt(size); d.writeInt(size); }
+            d.writeByteArray(buf);
+            boolean ok = binder.transact(code, d, r, 0);
+            int rs = r.dataSize();
+            if (rs >= 4) {
+                r.setDataPosition(0);
+                int first = r.readInt();
+                if (first == 0xFFFFFFFE) {
+                    String msg = "";
+                    try { msg = r.readString(); } catch (Throwable ignored) { }
+                    return "EXC(" + msg + ")";
+                }
+            }
+            return "ok=" + ok + " reply=" + rs;
         } catch (Throwable t) {
             Throwable c = t.getCause() != null ? t.getCause() : t;
             return "TRANSPORT " + c.getClass().getSimpleName();
@@ -128,25 +166,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 读 reply：若首字节是 0xFFFFFFFE 则是异常，解出异常文案；否则返回 CLEAN(size) */
-    private String describe(Parcel r) {
-        int size = r.dataSize();
-        if (size < 4) return "CLEAN(" + size + ")";
+    private void buzz(int ms) {
         try {
-            r.setDataPosition(0);
-            int code = r.readInt();
-            if (code == 0xFFFFFFFE) {
-                String msg = "";
-                try {
-                    msg = r.readString();
-                } catch (Throwable ignored) { }
-                return "EXC(" + (msg == null ? "?" : msg) + ")";
-            }
-            if (code == -1) return "EXC_UNKNOWN";
-            return "CLEAN(" + size + ")";
-        } catch (Throwable t) {
-            return "READFAIL(" + size + ")";
-        }
+            Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (v != null) v.vibrate(ms);
+        } catch (Throwable ignored) { }
     }
 
     private void append(String s) {
@@ -163,7 +187,7 @@ public class MainActivity extends Activity {
             byte[] bytes = report.getBytes("UTF-8");
             if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "sig_probe.txt");
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "dotmatrix_push.txt");
                 cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
                 cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
