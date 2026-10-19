@@ -6,7 +6,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.IBinder;
 import android.provider.MediaStore;
 import android.view.View;
 import android.view.ViewGroup;
@@ -18,40 +17,21 @@ import android.widget.TextView;
 import java.lang.reflect.Method;
 
 /**
- * 点阵服务可达性实验：
- * 1) 批量 getService 各候选服务名，记录 null / 非 null / 异常
- * 2) 验证是否为懒加载 HAL —— 让系统先用一次背屏后再查
+ * 把可达的 StepOS 框架服务接口方法全量导出，找点阵相关调用。
  */
 public class MainActivity extends Activity {
 
-    private static final String[] SVCS = {
-            "vendor.stepos.hardware.dot_matrix.IDotMatrix/default",
-            "vendor.stepos.hardware.dot_matrix.IDotMatrix",
-            "IDotMatrix/default",
-            "IDotMatrix",
-            "dot_matrix",
-            "dotmatrix",
-            "stepos_dot_matrix",
-            "vendor.stepos.hardware.display.ISteposDisplay/default",
-            "vendor.stepos.hardware.display.cwb.ISteposCwb/default",
-            "ISteposDisplay/default",
-            "stepos_device_control",
-            "stepos_gesture",
-            "stepos_statusbar",
-            "stepos_theme",
-            "stepscene",
-            "display",
-            "display_ext",
-            "display.smomoservice",
-            "lights",
-            "alphame_server"
+    // 上一轮实测可解析到 binder 的描述符
+    private static final String[] IFACES = {
+            "android.hardware.display.IStepOSDeviceControlService",
+            "android.hardware.display.IStepOSDisplayManager",
+            "android.display.ISmomoService",
+            "stepos.statusbar.IStepOSStatusBarService",
+            "com.stepos.theme.IStepOSThemeService"
     };
 
     private TextView logView;
     private String report = "";
-    private Method getService;
-    private Method checkService;
-    private int round = 0;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -63,14 +43,14 @@ public class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("点阵可达性 · 懒加载验证");
+        title.setText("StepOS 服务接口导出");
         title.setTextColor(0xFF4FF0C0);
         title.setTextSize(19);
         root.addView(title);
 
         logView = new TextView(this);
         logView.setTextColor(0xFFE8E8F0);
-        logView.setTextSize(11.5f);
+        logView.setTextSize(11f);
         logView.setTypeface(android.graphics.Typeface.MONOSPACE);
         logView.setPadding(0, dp(8), 0, dp(8));
         ScrollView sc = new ScrollView(this);
@@ -78,78 +58,85 @@ public class MainActivity extends Activity {
         root.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         Button scan = new Button(this);
-        scan.setText("重试获取（先去系统设置里调一下背屏）");
+        scan.setText("重新导出");
         scan.setAllCaps(false);
         scan.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { scanAll("手动重试"); dump(); }
+            @Override public void onClick(View v) { scanAll(); dump(); }
         });
         root.addView(scan);
 
         setContentView(root);
-        scanAll("首次启动");
+        scanAll();
         dump();
     }
 
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
-    private boolean init() {
-        try {
-            Class<?> smc = Class.forName("android.os.ServiceManager");
-            getService = smc.getMethod("getService", String.class);
-            try { checkService = smc.getMethod("checkService", String.class); } catch (Throwable ignored) { }
-            return true;
-        } catch (Throwable t) {
-            append("[反射失败] " + t + "\n");
-            return false;
-        }
-    }
-
-    private void scanAll(String tag) {
-        round++;
+    private void scanAll() {
         StringBuilder sb = new StringBuilder();
-        sb.append("\n===== 第 ").append(round).append(" 轮：").append(tag).append(" =====\n");
+        sb.append("===== 接口导出 =====\n");
         sb.append("sdk=").append(Build.VERSION.SDK_INT)
-          .append("  uid=").append(android.os.Process.myUid()).append("\n");
-        if (getService == null && !init()) { return; }
-
-        for (String name : SVCS) {
-            sb.append(name).append("  ->  ");
-            try {
-                Object o = getService.invoke(null, name);
-                if (o == null) {
-                    sb.append("null");
-                    if (checkService != null) {
-                        try {
-                            Object c = checkService.invoke(null, name);
-                            sb.append("  checkService=").append(c == null ? "null" : c.getClass().getSimpleName());
-                        } catch (Throwable t) {
-                            sb.append("  checkService异常=").append(simple(t));
-                        }
-                    }
-                    sb.append("\n");
-                } else {
-                    sb.append("OK  class=").append(o.getClass().getName());
-                    if (o instanceof IBinder) {
-                        IBinder bi = (IBinder) o;
-                        sb.append(" alive=").append(bi.isBinderAlive());
-                        try {
-                            sb.append(" desc=").append(bi.getInterfaceDescriptor());
-                        } catch (Throwable t) {
-                            sb.append(" desc异常=").append(simple(t));
-                        }
-                    }
-                    sb.append("\n");
-                }
-            } catch (Throwable t) {
-                sb.append("异常 ").append(simple(t)).append("\n");
-            }
-        }
+          .append(" uid=").append(android.os.Process.myUid()).append("\n\n");
+        for (String f : IFACES) dumpClass(sb, f);
         append(sb.toString());
     }
 
+    private void dumpClass(StringBuilder sb, String name) {
+        sb.append("### ").append(name).append("\n");
+        Class<?> c = null;
+        try {
+            c = Class.forName(name);
+            sb.append("  loaded: ").append(c.getName()).append("\n");
+        } catch (Throwable t) {
+            sb.append("  Class.forName 失败: ").append(simple(t)).append("\n");
+        }
+        if (c != null) {
+            dumpMethods(sb, c, "  ");
+            try {
+                for (Class<?> inner : c.getDeclaredClasses()) {
+                    sb.append("  [inner] ").append(inner.getSimpleName()).append("\n");
+                    dumpMethods(sb, inner, "    ");
+                }
+            } catch (Throwable t) {
+                sb.append("  inner 读取失败: ").append(simple(t)).append("\n");
+            }
+        }
+        // 常见 AIDL 生成类命名
+        for (String suffix : new String[]{"$Stub", "$Stub$Proxy"}) {
+            try {
+                Class<?> k = Class.forName(name + suffix);
+                sb.append("  [aidl] ").append(k.getName()).append(" OK\n");
+                dumpMethods(sb, k, "    ");
+            } catch (Throwable t) {
+                sb.append("  [aidl] ").append(name).append(suffix).append(" -> ").append(simple(t)).append("\n");
+            }
+        }
+        sb.append("\n");
+    }
+
+    private void dumpMethods(StringBuilder sb, Class<?> c, String indent) {
+        try {
+            Method[] ms = c.getDeclaredMethods();
+            sb.append(indent).append("methods(").append(ms.length).append("):\n");
+            for (Method m : ms) {
+                StringBuilder s = new StringBuilder();
+                s.append(indent).append("  ").append(m.getReturnType().getSimpleName())
+                 .append(" ").append(m.getName()).append("(");
+                Class<?>[] ps = m.getParameterTypes();
+                for (int i = 0; i < ps.length; i++) {
+                    if (i > 0) s.append(", ");
+                    s.append(ps[i].getSimpleName());
+                }
+                s.append(")\n");
+                sb.append(s);
+            }
+        } catch (Throwable t) {
+            sb.append(indent).append("methods 失败: ").append(simple(t)).append("\n");
+        }
+    }
+
     private String simple(Throwable t) {
-        Throwable c = t.getCause() != null ? t.getCause() : t;
-        return c.getClass().getSimpleName() + ":" + c.getMessage();
+        return t.getClass().getSimpleName() + ":" + t.getMessage();
     }
 
     private void append(String s) {
@@ -162,7 +149,7 @@ public class MainActivity extends Activity {
             byte[] bytes = report.getBytes("UTF-8");
             if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "dotmatrix_access.txt");
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "stepos_iface.txt");
                 cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
                 cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
