@@ -2,6 +2,8 @@ package com.zach.backscreenprobe;
 
 import android.app.Activity;
 import android.app.Presentation;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -22,6 +24,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +34,7 @@ public class MainActivity extends Activity implements SensorEventListener, Snake
     private DisplayManager dm;
     private SensorManager sm;
     private TextView logView;
+    private String lastReport = "";
     private TiltView tiltView;
     private SnakeView mainSnake;
     private Presentation backPres;
@@ -84,6 +88,14 @@ public class MainActivity extends Activity implements SensorEventListener, Snake
         tiltView = new TiltView(this);
         root.addView(tiltView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(96)));
+
+        Button copyBtn = new Button(this);
+        copyBtn.setText("复制诊断报告");
+        copyBtn.setAllCaps(false);
+        copyBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { copyReport(true); }
+        });
+        root.addView(copyBtn);
 
         Button rescan = new Button(this);
         rescan.setText("重新扫描显示器 / 重开背屏");
@@ -160,7 +172,9 @@ public class MainActivity extends Activity implements SensorEventListener, Snake
         } else {
             sb.append("系统只暴露 1 块显示器——背屏内容由系统侧接管，未作为 Android 独立显示器开放给应用。");
         }
-        logView.setText(sb.toString());
+        lastReport = sb.toString();
+        logView.setText(lastReport);
+        copyReport(false);
     }
 
     private String flagText(int f) {
@@ -234,7 +248,19 @@ public class MainActivity extends Activity implements SensorEventListener, Snake
     }
 
     private void appendLog(String s) {
-        logView.setText(logView.getText() + s);
+        lastReport = lastReport + s;
+        logView.setText(lastReport);
+        copyReport(false);
+    }
+
+    /** 把诊断报告写进剪贴板，方便助手直接读取，省得用户手抄。 */
+    private void copyReport(boolean toast) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null || lastReport == null || lastReport.length() == 0) return;
+            cm.setPrimaryClip(ClipData.newPlainText("背屏诊断", lastReport));
+            if (toast) Toast.makeText(this, "诊断报告已复制", Toast.LENGTH_SHORT).show();
+        } catch (Throwable ignored) { }
     }
 
     private void dismissPres() {
