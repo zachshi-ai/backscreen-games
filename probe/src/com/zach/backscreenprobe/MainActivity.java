@@ -22,8 +22,9 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * 解析各 transaction 的返回内容：十六进制 + 可打印字符串。
- * 目的：从 reply 里看出接口的数据结构和方法语义（例如是否返回点阵相关字段）。
+ * 用 AIDL 异常回执做签名探针：
+ * 给每个 transaction 发「宽/高/位图」结构，返回里不带 "Parcel data not fully consumed"
+ * 且不带其它异常的，就是真正接受位图参数的方法。
  */
 public class MainActivity extends Activity {
 
@@ -46,21 +47,21 @@ public class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("reply 结构解析");
+        title.setText("签名探针 · 找收画面的方法");
         title.setTextColor(0xFF4FF0C0);
-        title.setTextSize(18);
+        title.setTextSize(17);
         root.addView(title);
 
         logView = new TextView(this);
         logView.setTextColor(0xFFE8E8F0);
-        logView.setTextSize(9.5f);
+        logView.setTextSize(10f);
         logView.setTypeface(android.graphics.Typeface.MONOSPACE);
         ScrollView sc = new ScrollView(this);
         sc.addView(logView);
         root.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         Button run = new Button(this);
-        run.setText("开始解析");
+        run.setText("开始（盯着背屏）");
         run.setAllCaps(false);
         run.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { start(); }
@@ -78,8 +79,8 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 for (String[] s : SVCS) scan(s[0], s[1]);
-                running = false;
                 append("\n=== 完成 ===");
+                running = false;
             }
         }).start();
     }
@@ -98,60 +99,54 @@ public class MainActivity extends Activity {
             return;
         }
         for (int code = 1; code <= 40; code++) {
-            Parcel d = Parcel.obtain();
-            Parcel r = Parcel.obtain();
-            try {
-                d.writeInterfaceToken(desc);
-                d.writeInt(0);
-                boolean ok = b.transact(code, d, r, 0);
-                int size = r.dataSize();
-                String hex = "";
-                String ascii = "";
-                if (ok && size > 0 && size <= 4096) {
-                    r.setDataPosition(0);
-                    byte[] raw = r.marshall();
-                    hex = hexOf(raw, 48);
-                    ascii = asciiOf(raw);
-                }
-                append("\ncode=" + code + " ok=" + ok + " size=" + size);
-                if (!hex.isEmpty()) append("  hex: " + hex);
-                if (!ascii.isEmpty()) append("  txt: " + ascii);
-            } catch (Throwable t) {
-                Throwable c = t.getCause() != null ? t.getCause() : t;
-                append("\ncode=" + code + " 异常 " + c.getClass().getSimpleName() + ":" + c.getMessage());
-            } finally {
-                d.recycle();
-                r.recycle();
-            }
-            try { Thread.sleep(120); } catch (InterruptedException ignored) { }
+            String v1 = probe(b, desc, code, 1);
+            String v2 = probe(b, desc, code, 2);
+            String line = "code=" + code + " | A:" + v1 + " | B:" + v2;
+            append(line);
+            try { Thread.sleep(100); } catch (InterruptedException ignored) { }
         }
     }
 
-    private String hexOf(byte[] raw, int max) {
-        StringBuilder s = new StringBuilder();
-        int n = Math.min(raw.length, max);
-        for (int i = 0; i < n; i++) {
-            s.append(String.format(Locale.US, "%02x", raw[i]));
-            if (i % 2 == 1) s.append(' ');
+    /** variant 1 = (32,32,byte[128]) ; 2 = (byte[128]) */
+    private String probe(IBinder b, String desc, int code, int variant) {
+        Parcel d = Parcel.obtain();
+        Parcel r = Parcel.obtain();
+        try {
+            byte[] on = new byte[128];
+            for (int i = 0; i < on.length; i++) on[i] = (byte) 0xFF;
+            d.writeInterfaceToken(desc);
+            if (variant == 1) { d.writeInt(32); d.writeInt(32); }
+            d.writeByteArray(on);
+            b.transact(code, d, r, 0);
+            return describe(r);
+        } catch (Throwable t) {
+            Throwable c = t.getCause() != null ? t.getCause() : t;
+            return "TRANSPORT " + c.getClass().getSimpleName();
+        } finally {
+            d.recycle();
+            r.recycle();
         }
-        if (raw.length > max) s.append("...(").append(raw.length).append("B)");
-        return s.toString();
     }
 
-    private String asciiOf(byte[] raw) {
-        StringBuilder cur = new StringBuilder();
-        StringBuilder out = new StringBuilder();
-        for (byte bb : raw) {
-            char ch = (char) (bb & 0xFF);
-            if (ch >= 32 && ch < 127) {
-                cur.append(ch);
-            } else {
-                if (cur.length() >= 4) out.append('[').append(cur).append("] ");
-                cur.setLength(0);
+    /** 读 reply：若首字节是 0xFFFFFFFE 则是异常，解出异常文案；否则返回 CLEAN(size) */
+    private String describe(Parcel r) {
+        int size = r.dataSize();
+        if (size < 4) return "CLEAN(" + size + ")";
+        try {
+            r.setDataPosition(0);
+            int code = r.readInt();
+            if (code == 0xFFFFFFFE) {
+                String msg = "";
+                try {
+                    msg = r.readString();
+                } catch (Throwable ignored) { }
+                return "EXC(" + (msg == null ? "?" : msg) + ")";
             }
+            if (code == -1) return "EXC_UNKNOWN";
+            return "CLEAN(" + size + ")";
+        } catch (Throwable t) {
+            return "READFAIL(" + size + ")";
         }
-        if (cur.length() >= 4) out.append('[').append(cur).append("] ");
-        return out.toString();
     }
 
     private void append(String s) {
@@ -168,7 +163,7 @@ public class MainActivity extends Activity {
             byte[] bytes = report.getBytes("UTF-8");
             if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "stepos_reply.txt");
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "sig_probe.txt");
                 cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
                 cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
