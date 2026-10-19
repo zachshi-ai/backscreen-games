@@ -42,6 +42,19 @@ public class MainActivity extends Activity implements SensorEventListener, Snake
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override public void uncaughtException(Thread th, Throwable e) {
+                try {
+                    java.io.File f = new java.io.File(getExternalFilesDir(null), "crash.txt");
+                    java.io.PrintWriter w = new java.io.PrintWriter(f);
+                    w.println(new java.util.Date().toString());
+                    e.printStackTrace(w);
+                    w.close();
+                } catch (Throwable ignored) { }
+                if (prev != null) prev.uncaughtException(th, e);
+            }
+        });
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
         sm = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
