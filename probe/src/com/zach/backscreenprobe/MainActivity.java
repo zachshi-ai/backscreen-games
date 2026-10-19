@@ -3,6 +3,11 @@ package com.zach.backscreenprobe;
 import android.app.Activity;
 import android.app.Presentation;
 import android.content.ClipData;
+import android.content.ContentValues;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.hardware.Sensor;
@@ -254,12 +259,37 @@ public class MainActivity extends Activity implements SensorEventListener, Snake
     }
 
     /** 把诊断报告写进剪贴板，方便助手直接读取，省得用户手抄。 */
+    /** 把报告写成「下载/backscreen_probe.txt」，助手可直接读取，不依赖剪贴板或用户手抄。 */
+    private void dumpToDownloads(String content) {
+        if (content == null || content.length() == 0) return;
+        try {
+            byte[] bytes = content.getBytes("UTF-8");
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "backscreen_probe.txt");
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri != null) {
+                    java.io.OutputStream os = getContentResolver().openOutputStream(uri, "wt");
+                    if (os != null) { os.write(bytes); os.flush(); os.close(); }
+                }
+            } else {
+                java.io.File f = new java.io.File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "backscreen_probe.txt");
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
+                fo.write(bytes); fo.flush(); fo.close();
+            }
+        } catch (Throwable ignored) { }
+    }
+
     private void copyReport(boolean toast) {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm == null || lastReport == null || lastReport.length() == 0) return;
             cm.setPrimaryClip(ClipData.newPlainText("背屏诊断", lastReport));
-            if (toast) Toast.makeText(this, "诊断报告已复制", Toast.LENGTH_SHORT).show();
+            dumpToDownloads(lastReport);
+            if (toast) Toast.makeText(this, "报告已写入 下载/backscreen_probe.txt", Toast.LENGTH_SHORT).show();
         } catch (Throwable ignored) { }
     }
 
