@@ -1,1 +1,5 @@
-BackscreenGames-1.0.apk
+*.apk
+*.idsig
+*.jks
+*.keystore
+build/

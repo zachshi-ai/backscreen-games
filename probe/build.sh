@@ -1,9 +1,13 @@
 #!/bin/bash
+# 构建 BackscreenProbe APK（无 Gradle，直接用 build-tools）
+# 依赖：JDK 17、Android SDK（build-tools 34.0.0、platform android-34）
+# 签名：通过环境变量传入自己的 keystore，仓库不包含任何签名文件
+#   KEYSTORE=/path/to/your.jks KS_PASS=xxxx KEY_PASS=xxxx ./build.sh
 set -e
-SDK=/opt/android-sdk
+SDK=${ANDROID_SDK:-${ANDROID_HOME:-/opt/android-sdk}}
 BT=$SDK/build-tools/34.0.0
 AJ=$SDK/platforms/android-34/android.jar
-cd /root/.openclaw/workspace/userdata/158378947427704832/apk2
+cd "$(dirname "$0")"
 rm -rf build
 mkdir -p build/classes build/dex
 
@@ -27,11 +31,15 @@ cp build/base.apk build/unsigned.apk
 cd build/dex && zip -q ../unsigned.apk classes.dex && cd ../..
 "$BT/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
 
-KEYSTORE=/root/.openclaw/workspace/userdata/158378947427704832/apk-src/keystore.jks
-"$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:abgames123 --key-pass pass:abgames123 \
-  --v1-signing-enabled true --v2-signing-enabled true \
-  --out build/BackscreenProbe-1.1.apk build/aligned.apk
-
-"$BT/apksigner" verify build/BackscreenProbe-1.1.apk
+if [ -n "${KEYSTORE:-}" ]; then
+  "$BT/apksigner" sign --ks "$KEYSTORE" \
+    --ks-pass "pass:${KS_PASS:?请设置 KS_PASS}" --key-pass "pass:${KEY_PASS:-$KS_PASS}" \
+    --v1-signing-enabled true --v2-signing-enabled true \
+    --out build/BackscreenProbe-1.1.apk build/aligned.apk
+  "$BT/apksigner" verify build/BackscreenProbe-1.1.apk
+else
+  echo "未提供 KEYSTORE，跳过签名，产物为 build/aligned.apk"
+  cp build/aligned.apk build/BackscreenProbe-1.1.apk
+fi
 "$BT/aapt2" dump badging build/BackscreenProbe-1.1.apk | head -5
 ls -la build/BackscreenProbe-1.1.apk
