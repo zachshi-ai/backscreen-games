@@ -1,7 +1,9 @@
 package com.zach.backscreenprobe;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -19,14 +21,14 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.util.List;
-import java.util.Locale;
-
-/** 全机扫描：找出组件名/包名里与背屏相关的项，并标出是否 exported。 */
+/** 打开 com.val.hardware 的背屏测试界面，并导出它的全部组件。 */
 public class MainActivity extends Activity {
 
-    private static final String[] KW = {
-            "second", "cover", "matrix", "dot", "glyph", "rear", "smomo", "cwb", "backscreen", "back_screen"
+    private static final String TEST_PKG = "com.val.hardware";
+    private static final String[][] TARGETS = {
+            {TEST_PKG, "com.val.hardware.SecondScreen.SecondScreenActivity"},
+            {TEST_PKG, "com.val.hardware.SecondScreenColor.SecondScreenColorActivity"},
+            {"com.android.settings", "com.stepos.settings.StepOSSettingsActivity$StepOSBackScreenActivity"}
     };
 
     private TextView logView;
@@ -38,11 +40,11 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF08080C);
-        int pad = dp(14);
+        int pad = dp(12);
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("背屏入口扫描");
+        title.setText("背屏测试入口");
         title.setTextColor(0xFF4FF0C0);
         title.setTextSize(18);
         root.addView(title);
@@ -55,94 +57,101 @@ public class MainActivity extends Activity {
         sc.addView(logView);
         root.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        Button run = new Button(this);
-        run.setText("重新扫描");
-        run.setAllCaps(false);
-        run.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { scan(); dump(); }
+        addButton(root, "打开 SecondScreen 测试");
+        addButton(root, "打开 SecondScreenColor 测试");
+        addButton(root, "打开系统背屏设置");
+
+        Button dumpBtn = new Button(this);
+        dumpBtn.setText("导出 com.val.hardware 全部组件");
+        dumpBtn.setAllCaps(false);
+        dumpBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { dumpPkg(); dump(); }
         });
-        root.addView(run);
+        root.addView(dumpBtn);
 
         setContentView(root);
-        scan();
+        dumpPkg();
         dump();
     }
 
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
-    private void scan() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("=== 背屏相关组件扫描 ===\n");
-        try {
-            PackageManager pm = getPackageManager();
-            List<PackageInfo> pis = pm.getInstalledPackages(PackageManager.GET_ACTIVITIES
-                    | PackageManager.GET_SERVICES | PackageManager.GET_RECEIVERS
-                    | PackageManager.GET_PROVIDERS);
-            int found = 0;
-            for (PackageInfo pi : pis) {
-                String pkg = pi.packageName.toLowerCase(Locale.US);
-                boolean pkgHit = hit(pkg);
-                StringBuilder block = new StringBuilder();
-                int comp = 0;
-
-                if (pi.activities != null) {
-                    for (ActivityInfo a : pi.activities) {
-                        if (hit(a.name.toLowerCase(Locale.US))) {
-                            block.append("  A ").append(a.name)
-                                 .append(" exported=").append(a.exported)
-                                 .append(" perm=").append(a.permission).append("\n");
-                            comp++;
-                        }
-                    }
-                }
-                if (pi.services != null) {
-                    for (ServiceInfo s : pi.services) {
-                        if (hit(s.name.toLowerCase(Locale.US))) {
-                            block.append("  S ").append(s.name)
-                                 .append(" exported=").append(s.exported)
-                                 .append(" perm=").append(s.permission).append("\n");
-                            comp++;
-                        }
-                    }
-                }
-                if (pi.receivers != null) {
-                    for (ActivityInfo r : pi.receivers) {
-                        if (hit(r.name.toLowerCase(Locale.US))) {
-                            block.append("  R ").append(r.name)
-                                 .append(" exported=").append(r.exported)
-                                 .append(" perm=").append(r.permission).append("\n");
-                            comp++;
-                        }
-                    }
-                }
-                if (pi.providers != null) {
-                    for (ProviderInfo p : pi.providers) {
-                        if (hit(p.name.toLowerCase(Locale.US)) || (p.authority != null && hit(p.authority.toLowerCase(Locale.US)))) {
-                            block.append("  P ").append(p.name)
-                                 .append(" authority=").append(p.authority)
-                                 .append(" exported=").append(p.exported).append("\n");
-                            comp++;
-                        }
-                    }
-                }
-                if (comp > 0 || pkgHit) {
-                    found++;
-                    sb.append("\n[pkg] ").append(pi.packageName)
-                      .append(pkgHit ? "  <包名命中>" : "").append("\n");
-                    sb.append(block);
-                }
+    private void addButton(LinearLayout root, final String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                int idx = label.contains("Color") ? 1 : (label.contains("系统") ? 2 : 0);
+                launch(TARGETS[idx][0], TARGETS[idx][1]);
             }
-            sb.append("\n命中包数: ").append(found).append("\n");
-        } catch (Throwable t) {
-            sb.append("扫描异常: ").append(t).append("\n");
-        }
-        report = report + sb;
-        logView.setText(report);
+        });
+        root.addView(b);
     }
 
-    private boolean hit(String s) {
-        for (String k : KW) if (s.contains(k)) return true;
-        return false;
+    private void launch(String pkg, String cls) {
+        try {
+            Intent i = new Intent();
+            i.setClassName(pkg, cls);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            append("启动成功: " + cls);
+        } catch (ActivityNotFoundException e) {
+            append("未找到: " + cls);
+        } catch (Throwable t) {
+            append("启动失败: " + cls + " -> " + t.getClass().getSimpleName() + ":" + t.getMessage());
+        }
+    }
+
+    private void dumpPkg() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n=== com.val.hardware 组件 ===\n");
+        try {
+            PackageManager pm = getPackageManager();
+            PackageInfo pi = pm.getPackageInfo(TEST_PKG, PackageManager.GET_ACTIVITIES
+                    | PackageManager.GET_SERVICES | PackageManager.GET_RECEIVERS
+                    | PackageManager.GET_PROVIDERS);
+            if (pi.activities != null) {
+                sb.append("[Activities]\n");
+                for (ActivityInfo a : pi.activities) {
+                    sb.append("  A ").append(a.name)
+                      .append(" exported=").append(a.exported)
+                      .append(" perm=").append(a.permission).append("\n");
+                }
+            }
+            if (pi.services != null) {
+                sb.append("[Services]\n");
+                for (ServiceInfo s : pi.services) {
+                    sb.append("  S ").append(s.name)
+                      .append(" exported=").append(s.exported)
+                      .append(" perm=").append(s.permission).append("\n");
+                }
+            }
+            if (pi.receivers != null) {
+                sb.append("[Receivers]\n");
+                for (ActivityInfo r : pi.receivers) {
+                    sb.append("  R ").append(r.name)
+                      .append(" exported=").append(r.exported).append("\n");
+                }
+            }
+            if (pi.providers != null) {
+                sb.append("[Providers]\n");
+                for (ProviderInfo p : pi.providers) {
+                    sb.append("  P ").append(p.name)
+                      .append(" authority=").append(p.authority)
+                      .append(" exported=").append(p.exported).append("\n");
+                }
+            }
+        } catch (Throwable t) {
+            sb.append("读取失败: ").append(t.getClass().getSimpleName()).append(":")
+              .append(t.getMessage()).append("\n");
+        }
+        append(sb.toString());
+    }
+
+    private void append(String s) {
+        report = report + s + "\n";
+        logView.setText(report);
     }
 
     private void dump() {
@@ -150,7 +159,7 @@ public class MainActivity extends Activity {
             byte[] bytes = report.getBytes("UTF-8");
             if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "back_entry.txt");
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "val_hardware.txt");
                 cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
                 cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
