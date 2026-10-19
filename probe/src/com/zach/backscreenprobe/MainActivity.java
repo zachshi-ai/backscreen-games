@@ -170,8 +170,11 @@ public class MainActivity extends Activity {
 
     private void append(String s) {
         String ts = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
-        report = report + "[" + ts + "] " + s;
-        logView.setText(report);
+        report = report + "[" + ts + "] " + s + "\n";
+        runOnUiThread(new Runnable() {
+            @Override public void run() { logView.setText(report); }
+        });
+        dump();
     }
 
     private void dump() {
