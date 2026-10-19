@@ -7,16 +7,12 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ServiceInfo;
-import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.IBinder;
-import android.os.Parcel;
 import android.provider.MediaStore;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -24,28 +20,24 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * 1) 抓 smomo 各方法的 SecurityException 文案（通常写明所需权限）
- * 2) 用更宽的词表重扫组件，并整包导出 settings / stepos 系应用的对外组件
+ * 逐包隔离的组件扫描：重点导出 com.stepos.* / com.val.* / settings / systemui 的对外组件，
+ * 其余包按宽词表筛选。每个包独立 try/catch，避免一个异常中断全表。
  */
 public class MainActivity extends Activity {
 
     private static final String[] KW = {
             "led", "light", "pattern", "back", "pixel", "panel", "ambient", "aod", "cover",
-            "second", "matrix", "dot", "glyph", "rear", "smomo", "cwb", "extscreen", "subscreen"
-    };
-
-    private static final String[] FULL_DUMP_PKGS = {
-            "com.android.settings", "com.android.systemui", "com.val.hardware", "com.stepos.systemuiex"
+            "second", "matrix", "dot", "glyph", "rear", "smomo", "cwb", "extscreen", "subscreen", "display"
     };
 
     private TextView logView;
     private TextView statusView;
     private String report = "";
+    private int pkgIndex = 0, pkgTotal = 0;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -57,10 +49,9 @@ public class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("背屏通道 · 权限与组件");
+        title.setText("背屏组件 · 全量扫描");
         title.setTextColor(0xFF4FF0C0);
         title.setTextSize(19);
-        title.setLetterSpacing(0.02f);
         root.addView(title);
 
         statusView = new TextView(this);
@@ -108,100 +99,100 @@ public class MainActivity extends Activity {
     private void start() {
         new Thread(new Runnable() {
             @Override public void run() {
-                smomoPermissions();
-                componentScan();
+                try {
+                    scan();
+                } catch (Throwable t) {
+                    append("[FATAL] " + t);
+                }
                 setStatus("完成");
             }
         }).start();
     }
 
-    /* ---------- 1. smomo 权限文案 ---------- */
-    private void smomoPermissions() {
-        append("\n### smomo 权限校验文案 ###");
-        IBinder b;
-        try {
-            Class<?> smc = Class.forName("android.os.ServiceManager");
-            Method get = smc.getMethod("getService", String.class);
-            Object o = get.invoke(null, "display.smomoservice");
-            if (!(o instanceof IBinder)) { append("binder null"); return; }
-            b = (IBinder) o;
-        } catch (Throwable t) {
-            append("bind 失败 " + t);
-            return;
-        }
-        for (int code = 1; code <= 25; code++) {
-            Parcel d = Parcel.obtain();
-            Parcel r = Parcel.obtain();
+    private void scan() {
+        PackageManager pm = getPackageManager();
+        List<PackageInfo> pis = pm.getInstalledPackages(PackageManager.GET_ACTIVITIES
+                | PackageManager.GET_SERVICES | PackageManager.GET_RECEIVERS
+                | PackageManager.GET_PROVIDERS);
+        pkgTotal = pis.size();
+        append("包总数: " + pkgTotal);
+
+        for (PackageInfo pi : pis) {
+            pkgIndex++;
             try {
-                d.writeInterfaceToken("android.display.ISmomoService");
-                d.writeInt(0);
-                b.transact(code, d, r, 0);
-                append("code=" + code + " -> CLEAN size=" + r.dataSize());
+                handlePackage(pi);
             } catch (Throwable t) {
-                Throwable c = t.getCause() != null ? t.getCause() : t;
-                append("code=" + code + " -> " + c.getClass().getSimpleName() + ": " + c.getMessage());
-            } finally {
-                d.recycle();
-                r.recycle();
+                append("[skip] " + pi.packageName + " -> " + t.getClass().getSimpleName());
+            }
+            if (pkgIndex % 25 == 0) {
+                final String s = "进度 " + pkgIndex + "/" + pkgTotal;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { statusView.setText(s); }
+                });
             }
         }
+        append("=== 扫描结束 " + pkgIndex + "/" + pkgTotal + " ===");
     }
 
-    /* ---------- 2. 宽词表 + 整包导出 ---------- */
-    private void componentScan() {
-        append("\n### 组件宽扫 ###");
-        try {
-            PackageManager pm = getPackageManager();
-            List<PackageInfo> pis = pm.getInstalledPackages(PackageManager.GET_ACTIVITIES
-                    | PackageManager.GET_SERVICES | PackageManager.GET_RECEIVERS
-                    | PackageManager.GET_PROVIDERS);
-            for (PackageInfo pi : pis) {
-                boolean full = false;
-                for (String p : FULL_DUMP_PKGS) if (p.equals(pi.packageName)) full = true;
-                StringBuilder block = new StringBuilder();
-                int hitCount = 0;
+    private void handlePackage(PackageInfo pi) {
+        String pkg = pi.packageName;
+        boolean full = pkg.startsWith("com.stepos.") || pkg.startsWith("com.val.") || pkg.startsWith("com.stepx.")
+                || pkg.equals("com.android.settings") || pkg.equals("com.android.systemui");
 
-                if (pi.activities != null) {
-                    for (ActivityInfo a : pi.activities) {
-                        if (full || hit(a.name)) {
-                            block.append("  A ").append(a.name)
-                                 .append(" exported=").append(a.exported)
-                                 .append(a.permission == null ? "" : (" perm=" + a.permission)).append("\n");
-                            hitCount++;
-                        }
-                    }
-                }
-                if (pi.services != null) {
-                    for (ServiceInfo s : pi.services) {
-                        if (full || hit(s.name)) {
-                            block.append("  S ").append(s.name)
-                                 .append(" exported=").append(s.exported)
-                                 .append(s.permission == null ? "" : (" perm=" + s.permission)).append("\n");
-                            hitCount++;
-                        }
-                    }
-                }
-                if (pi.providers != null) {
-                    for (ProviderInfo p : pi.providers) {
-                        if (full || hit(p.name)) {
-                            block.append("  P ").append(p.name)
-                                 .append(" auth=").append(p.authority)
-                                 .append(" exported=").append(p.exported).append("\n");
-                            hitCount++;
-                        }
-                    }
-                }
-                if (hitCount > 0) {
-                    append("\n[pkg] " + pi.packageName + (full ? "  <整包>" : ""));
-                    append(block.toString());
+        StringBuilder block = new StringBuilder();
+        int hits = 0;
+
+        if (pi.activities != null) {
+            for (ActivityInfo a : pi.activities) {
+                if (a == null) continue;
+                if (full || hit(a.name)) {
+                    block.append("  A ").append(a.name)
+                         .append(" exported=").append(a.exported)
+                         .append(a.permission == null ? "" : (" perm=" + a.permission)).append("\n");
+                    hits++;
                 }
             }
-        } catch (Throwable t) {
-            append("扫描异常 " + t);
+        }
+        if (pi.services != null) {
+            for (ServiceInfo s : pi.services) {
+                if (s == null) continue;
+                if (full || hit(s.name)) {
+                    block.append("  S ").append(s.name)
+                         .append(" exported=").append(s.exported)
+                         .append(s.permission == null ? "" : (" perm=" + s.permission)).append("\n");
+                    hits++;
+                }
+            }
+        }
+        if (pi.receivers != null) {
+            for (ActivityInfo r : pi.receivers) {
+                if (r == null) continue;
+                if (full || hit(r.name)) {
+                    block.append("  R ").append(r.name)
+                         .append(" exported=").append(r.exported).append("\n");
+                    hits++;
+                }
+            }
+        }
+        if (pi.providers != null) {
+            for (ProviderInfo p : pi.providers) {
+                if (p == null) continue;
+                if (full || hit(p.name)) {
+                    block.append("  P ").append(p.name)
+                         .append(" auth=").append(p.authority)
+                         .append(" exported=").append(p.exported).append("\n");
+                    hits++;
+                }
+            }
+        }
+        if (hits > 0) {
+            append("\n[pkg] " + pkg + (full ? "  <整包>" : ""));
+            append(block.toString());
         }
     }
 
     private boolean hit(String s) {
+        if (s == null) return false;
         String l = s.toLowerCase(Locale.US);
         for (String k : KW) if (l.contains(k)) return true;
         return false;
@@ -215,13 +206,11 @@ public class MainActivity extends Activity {
 
     private void append(String s) {
         report = report + s + "\n";
-        String snapshot = report;
+        final String snap = report;
         runOnUiThread(new Runnable() {
-            @Override public void run() {
-                logView.setText(snapshot);
-            }
+            @Override public void run() { logView.setText(snap); }
         });
-        dump(snapshot);
+        dump(snap);
     }
 
     private void dump(String content) {
@@ -229,7 +218,7 @@ public class MainActivity extends Activity {
             byte[] bytes = content.getBytes("UTF-8");
             if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "perm_n_comp.txt");
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "stepos_comp.txt");
                 cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
                 cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
