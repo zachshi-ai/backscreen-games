@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#08080c">
+<title>背屏打砖块</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;user-select:none;
+    font-family:system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+  body{display:flex;align-items:center;justify-content:center;height:100dvh}
+  .frame{position:relative;width:min(98vw,calc(97vh * 1.6376));aspect-ratio:976/596;
+    border-radius:16px;overflow:hidden;box-shadow:0 0 0 1px #1b1b22,0 12px 40px rgba(0,0,0,.8)}
+  canvas{display:block;width:100%;height:100%}
+  a.back{position:absolute;left:10px;top:8px;color:#6d6d7a;font-size:13px;text-decoration:none;
+    padding:6px 10px;border-radius:8px;background:rgba(0,0,0,.45)}
+  a.back:active{background:rgba(255,255,255,.12)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <canvas id="c" width="976" height="596"></canvas>
+  <a class="back" href="index.html">返回</a>
+</div>
+<script>
+(function(){
+"use strict";
+const W=976,H=596;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+function buzz(ms){ if(navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
+
+const PAD_H=14, BALL_R=9, FLOOR=H-40;
+const COLORS=[{c:'#7b6cff',p:10},{c:'#39d0ff',p:15},{c:'#4ff0c0',p:20},{c:'#ffd54a',p:30}];
+
+let G;
+function buildBricks(){
+  const cols=5, rows=Math.min(6, 3+G.level), pad=10, top=44, bh=26, gap=6;
+  const bw=(W-pad*(cols+1)-gap*(cols-1))/cols;
+  const list=[];
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const hard = (r===rows-1); // 最下一排是硬砖
+      list.push({
+        x:pad+c*(bw+gap), y:top+r*(bh+gap), w:bw, h:bh,
+        hp: hard?2:1, alive:true,
+        color: COLORS[Math.min(3, r)] ? (hard?'#ff7a4d':COLORS[Math.min(3,r)].c) : '#7b6cff',
+        pts: hard?40:(10+r*5)
+      });
+    }
+  }
+  G.bricks=list;
+}
+function resetBall(){
+  G.ball={x:G.pad.x, y:FLOOR-PAD_H-BALL_R-2, vx:0, vy:0, speed:520*G.speedMul, live:false};
+  G.serve=true;
+}
+function reset(){
+  G={
+    pad:{x:W/2, w:150, vx:0},
+    ball:null, bricks:[], score:0, lives:3, level:1, speedMul:1,
+    best:+(localStorage.getItem('brk_best')||0),
+    flash:0, shake:0, over:false, paused:false, serve:true, u:0, hitCount:0
+  };
+  buildBricks(); resetBall();
+}
+function gameOver(){
+  G.over=true;
+  if(G.score>G.best){ G.best=G.score; localStorage.setItem('brk_best',String(G.score)); }
+  buzz(220);
+}
+
+/* ---------- 逻辑 ---------- */
+function serveBall(dragX){
+  const mag=Math.abs(dragX);
+  const speed=clamp(420+mag*3.2, 420, 1050);
+  const dir=dragX===0?1:(dragX>0?1:-1);
+  const ang=0.34*dir;                       // 偏移角
+  G.ball.speed=speed;
+  G.ball.vx=Math.sin(ang)*speed;
+  G.ball.vy=-Math.cos(ang)*speed;
+  G.ball.live=true; G.serve=false; buzz(18);
+}
+function stepBall(dt){
+  const b=G.ball;
+  if(!b.live){
+    b.x=G.pad.x; b.y=FLOOR-PAD_H-BALL_R-2;
+    return;
+  }
+  const sub=4, h=dt/sub;
+  for(let i=0;i<sub;i++){
+    b.x+=b.vx*h; b.y+=b.vy*h;
+    if(b.x-BALL_R<0){ b.x=BALL_R; b.vx=Math.abs(b.vx); buzz(6); }
+    if(b.x+BALL_R>W){ b.x=W-BALL_R; b.vx=-Math.abs(b.vx); buzz(6); }
+    if(b.y-BALL_R<0){ b.y=BALL_R; b.vy=Math.abs(b.vy); buzz(6); }
+    // 挡板
+    if(b.vy>0 && b.y+BALL_R>=FLOOR-PAD_H && b.y-BALL_R<FLOOR &&
+       b.x>G.pad.x-G.pad.w/2-BALL_R && b.x<G.pad.x+G.pad.w/2+BALL_R){
+      const rel=clamp((b.x-G.pad.x)/(G.pad.w/2),-1,1);
+      const ang=rel*1.05;
+      b.speed=Math.min(1500, b.speed*1.012);
+      b.vx=Math.sin(ang)*b.speed; b.vy=-Math.cos(ang)*b.speed;
+      b.y=FLOOR-PAD_H-BALL_R;
+      G.hitCount++; buzz(10);
+    }
+    // 砖块
+    for(const br of G.bricks){
+      if(!br.alive) continue;
+      if(b.x+BALL_R>br.x && b.x-BALL_R<br.x+br.w && b.y+BALL_R>br.y && b.y-BALL_R<br.y+br.h){
+        const ox=Math.min(b.x+BALL_R-br.x, br.x+br.w-(b.x-BALL_R));
+        const oy=Math.min(b.y+BALL_R-br.y, br.y+br.h-(b.y-BALL_R));
+        if(ox<oy){ b.vx=-b.vx; b.x+= b.vx>0? ox:-ox; }
+        else { b.vy=-b.vy; b.y+= b.vy>0? oy:-oy; }
+        br.hp--;
+        if(br.hp<=0){ br.alive=false; G.score+=br.pts; G.flash=1; buzz(24); }
+        else { G.score+=5; buzz(12); G.shake=0.4; }
+        break;
+      }
+    }
+    // 掉落
+    if(b.y-BALL_R>H){
+      b.live=false; G.lives--; G.shake=0.7; buzz(90);
+      if(G.lives<=0){ gameOver(); return; }
+      resetBall();
+      return;
+    }
+  }
+}
+function levelClear(){
+  G.level++; G.speedMul=Math.min(1.6, G.speedMul*1.08);
+  G.lives=Math.min(5, G.lives+1); G.score+=100;
+  buildBricks(); resetBall(); G.flash=1; buzz(60);
+}
+function update(dt){
+  if(G.over||G.paused) return;
+  // 挡板跟随控制量
+  G.pad.x=clamp(G.pad.x + G.u*1050*dt, G.pad.w/2, W-G.pad.w/2);
+  stepBall(dt);
+  if(!G.over && G.bricks.every(b=>!b.alive)) levelClear();
+  G.flash=Math.max(0,G.flash-dt*4);
+  G.shake=Math.max(0,G.shake-dt*2.4);
+}
+
+/* ---------- 绘制 ---------- */
+function rr(x,y,w,h,r){ ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x,y,w,h,r); else ctx.rect(x,y,w,h); ctx.fill(); }
+function draw(){
+  ctx.fillStyle='#08080c'; ctx.fillRect(0,0,W,H);
+  const sx=(Math.random()-0.5)*G.shake*10, sy=(Math.random()-0.5)*G.shake*10;
+  ctx.save(); ctx.translate(sx,sy);
+  for(const b of G.bricks){
+    if(!b.alive) continue;
+    ctx.globalAlpha = b.hp>1?1:0.72;
+    ctx.fillStyle=b.color; rr(b.x,b.y,b.w,b.h,7);
+    if(b.hp>1){ ctx.fillStyle='rgba(255,255,255,.35)'; rr(b.x+b.w-14,b.y+4,8,b.h-8,4); }
+    ctx.globalAlpha=1;
+  }
+  // 挡板
+  ctx.fillStyle='#e8e8f0';
+  rr(G.pad.x-G.pad.w/2, FLOOR-PAD_H, G.pad.w, PAD_H, 7);
+  ctx.fillStyle='#4ff0c0';
+  rr(G.pad.x-G.pad.w/2, FLOOR-PAD_H, G.pad.w, 4, 2);
+  // 球
+  const b=G.ball;
+  if(b){
+    ctx.fillStyle='rgba(255,255,255,.12)';
+    ctx.beginPath(); ctx.arc(b.x,b.y,BALL_R*1.9,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(b.x,b.y,BALL_R,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+  // HUD
+  ctx.textBaseline='top'; ctx.textAlign='left';
+  ctx.fillStyle='#e8e8f0'; ctx.font='600 34px system-ui,sans-serif';
+  ctx.fillText(String(G.score),24,16);
+  ctx.font='500 17px system-ui,sans-serif'; ctx.fillStyle='#6d6d7a';
+  ctx.fillText('BEST '+G.best,24,56);
+  ctx.textAlign='right';
+  ctx.fillStyle='#8a8a99';
+  ctx.fillText('第 '+G.level+' 关  连击 '+G.hitCount, W-24, 20);
+  ctx.fillText('球速 '+(G.ball&&G.ball.speed?Math.round(G.ball.speed):'-'), W-24, 44);
+  // 生命
+  for(let i=0;i<G.lives;i++){ ctx.fillStyle='#ff5470'; ctx.beginPath(); ctx.arc(W-32-i*26,H-30,7,0,Math.PI*2); ctx.fill(); }
+  // u 指示
+  const bw=180,bh=6,bx=W/2-bw/2,by=H-22;
+  ctx.fillStyle='#1a1a22'; rr(bx,by,bw,bh,3);
+  const w=Math.abs(G.u)*bw/2;
+  ctx.fillStyle='#4ff0c0'; rr(G.u>=0?bx+bw/2:bx+bw/2-w, by, Math.max(3,w), bh, 3);
+  if(G.flash>0){ ctx.fillStyle='rgba(255,255,255,'+(G.flash*0.14)+')'; ctx.fillRect(0,0,W,H); }
+  if(G.serve && !G.over){
+    ctx.textAlign='center'; ctx.fillStyle='#8a8a99'; ctx.font='500 22px system-ui,sans-serif';
+    ctx.fillText('按住左右拖动 → 松手发球', W/2, H/2+60);
+  }
+  if(G.paused && !G.over) overlay('已暂停','双击屏幕继续');
+  if(G.over) overlay('游戏结束','得分 '+G.score+'  ·  点击重新开始');
+}
+function overlay(title,sub){
+  ctx.fillStyle='rgba(4,4,8,.74)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#f2f2f8'; ctx.font='700 52px system-ui,sans-serif';
+  ctx.fillText(title,W/2,H/2-24);
+  ctx.fillStyle='#8a8a99'; ctx.font='500 22px system-ui,sans-serif';
+  ctx.fillText(sub,W/2,H/2+40);
+}
+
+/* ---------- 输入 ---------- */
+const ptr={down:false,anchorX:0,dragX:0,startT:0,lastTap:0,moved:false};
+function toCanvas(e){ const r=cv.getBoundingClientRect(); return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height}; }
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+  if(G.over){ reset(); return; }
+  ptr.down=true; ptr.moved=false; ptr.dragX=0; ptr.startT=performance.now();
+  ptr.anchorX=toCanvas(e).x;
+});
+cv.addEventListener('pointermove',e=>{
+  if(!ptr.down) return;
+  e.preventDefault();
+  const x=toCanvas(e).x;
+  ptr.dragX=x-ptr.anchorX;
+  G.u=clamp(ptr.dragX/(W*0.22),-1,1);
+  if(Math.abs(ptr.dragX)>12) ptr.moved=true;
+});
+function endPointer(e){
+  if(!ptr.down) return;
+  ptr.down=false;
+  const dur=performance.now()-ptr.startT;
+  if(!ptr.moved && dur<220){
+    const now=performance.now();
+    if(now-ptr.lastTap<340){ G.paused=!G.paused; ptr.lastTap=0; buzz(14); }
+    else ptr.lastTap=now;
+  } else if(G.serve && !G.over && !G.paused){
+    serveBall(ptr.dragX);
+  }
+  G.u=0;
+}
+cv.addEventListener('pointerup',endPointer);
+cv.addEventListener('pointercancel',endPointer);
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+
+/* ---------- 主循环 ---------- */
+let last=performance.now(), accum=0;
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  accum+=dt;
+  const STEP=1/90; let guard=0;
+  while(accum>=STEP && guard++<6){ update(STEP); accum-=STEP; }
+  draw();
+  requestAnimationFrame(loop);
+}
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

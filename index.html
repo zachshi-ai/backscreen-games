@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#08080c">
+<title>背屏游戏 · 三合一</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;user-select:none;
+    font-family:system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif;color:#e8e8f0}
+  body{display:flex;align-items:center;justify-content:center;height:100dvh}
+  .frame{position:relative;width:min(98vw,calc(97vh * 1.6376));aspect-ratio:976/596;
+    border-radius:18px;overflow:hidden;box-shadow:0 0 0 1px #1b1b22,0 12px 40px rgba(0,0,0,.85);
+    background:#08080c;display:flex;flex-direction:column;padding:26px 30px;gap:16px}
+  header{display:flex;align-items:baseline;gap:14px}
+  h1{font-size:30px;margin:0;font-weight:700;letter-spacing:.5px}
+  header span{font-size:14px;color:#6d6d7a}
+  .grid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:16px;min-height:0}
+  a.card{position:relative;border-radius:16px;background:#101018;border:1px solid #1e1e28;
+    text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;
+    padding:18px;overflow:hidden;transition:transform .12s,border-color .12s}
+  a.card:active{transform:scale(.98);border-color:#4ff0c0}
+  .card h2{font-size:22px;margin:0 0 6px;font-weight:700}
+  .card p{margin:0;font-size:13.5px;line-height:1.55;color:#8a8a99}
+  .ico{position:absolute;right:12px;bottom:6px;font-size:64px;opacity:.13;line-height:1}
+  .tag{display:inline-block;font-size:11px;color:#4ff0c0;background:rgba(79,240,192,.1);
+    padding:3px 8px;border-radius:999px;margin-bottom:8px}
+  footer{font-size:12.5px;color:#5c5c69;line-height:1.6}
+  .dot{color:#4ff0c0}
+  @media (max-height:460px){ .card p{display:none} h1{font-size:24px} }
+</style>
+</head>
+<body>
+<div class="frame">
+  <header>
+    <h1>背屏游戏</h1>
+    <span>无按键 · 单指控制 · 为小副屏重排的版式</span>
+  </header>
+  <div class="grid">
+    <a class="card" href="snake.html">
+      <div>
+        <div class="tag">上下滑</div>
+        <h2>贪吃蛇 · 轨道版</h2>
+        <p>蛇自动向右爬，上下滑动换轨道。吃食加速，撞红块丢三节，长按冲刺。</p>
+      </div>
+      <div class="ico">🐍</div>
+    </a>
+    <a class="card" href="breakout.html">
+      <div>
+        <div class="tag">左右拖</div>
+        <h2>打砖块</h2>
+        <p>拖动控制挡板，松手发球，拖得越远初速越快。三命，清屏进下一关。</p>
+      </div>
+      <div class="ico">🧱</div>
+    </a>
+    <a class="card" href="doodle.html">
+      <div>
+        <div class="tag">左右拖</div>
+        <h2>跳跳 · 上升压缩版</h2>
+        <p>自动弹跳往上爬，左右拖拽落在平台上，黄色弹簧三倍跳，掉下去扣命。</p>
+      </div>
+      <div class="ico">🚀</div>
+    </a>
+  </div>
+  <footer>
+    画布按副屏可视区比例（976 × 596）排版，黑色留边即为副屏外区域。<br>
+    双击屏幕 <span class="dot">暂停 / 继续</span>，游戏中松手即回中，全程不需要实体按键。
+  </footer>
+</div>
+</body>
+</html>

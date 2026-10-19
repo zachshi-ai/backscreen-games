@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#08080c">
+<title>背屏贪吃蛇</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;user-select:none;
+    font-family:system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+  body{display:flex;align-items:center;justify-content:center;height:100dvh}
+  .frame{position:relative;width:min(98vw,calc(97vh * 1.6376));aspect-ratio:976/596;
+    border-radius:16px;overflow:hidden;box-shadow:0 0 0 1px #1b1b22,0 12px 40px rgba(0,0,0,.8)}
+  canvas{display:block;width:100%;height:100%}
+  a.back{position:absolute;left:10px;top:8px;color:#6d6d7a;font-size:13px;text-decoration:none;
+    padding:6px 10px;border-radius:8px;background:rgba(0,0,0,.45)}
+  a.back:active{background:rgba(255,255,255,.12)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <canvas id="c" width="976" height="596"></canvas>
+  <a class="back" href="index.html">返回</a>
+</div>
+<script>
+(function(){
+"use strict";
+const W=976,H=596,COLS=20,ROWS=12,CW=W/COLS,CH=H/ROWS;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+let buzzOn=true;
+function buzz(ms){ if(buzzOn && navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
+
+/* ---------- 状态 ---------- */
+let G;
+function cellFree(col,row){
+  if(G.food && G.food.col===col && G.food.row===row) return false;
+  for(const s of G.segs) if(s.col===col && s.row===row) return false;
+  for(const o of G.obstacles) if(o.col===col && o.row===row) return false;
+  return true;
+}
+function randCell(){
+  for(let i=0;i<400;i++){
+    const col=Math.floor(Math.random()*COLS), row=Math.floor(Math.random()*ROWS);
+    if(cellFree(col,row)) return {col,row};
+  }
+  return {col:Math.floor(Math.random()*COLS),row:Math.floor(Math.random()*ROWS)};
+}
+function placeFood(){ G.food=randCell(); }
+function ensureObstacles(){
+  const want=Math.min(5,Math.floor(G.score/5));
+  while(G.obstacles.length<want){
+    const cell=randCell();
+    const head=G.segs[G.segs.length-1];
+    if(cell.col===((head.col+1)%COLS) || cell.col===((head.col+2)%COLS)) continue;
+    G.obstacles.push(cell);
+  }
+}
+function reset(){
+  G={
+    segs:[{col:2,row:6},{col:1,row:6},{col:0,row:6}], // 尾 -> 头
+    targetRow:6, vrow:6, acc:0, growing:0,
+    score:0, best:+(localStorage.getItem('snake_best')||0),
+    food:null, obstacles:[], flash:0, hurt:0,
+    speed:6, over:false, paused:false, sprintDrain:0, u:0, t:0
+  };
+  placeFood();
+}
+function gameOver(){
+  G.over=true;
+  if(G.score>G.best){ G.best=G.score; localStorage.setItem('snake_best',String(G.score)); }
+  buzz(220);
+}
+
+/* ---------- 逻辑推进 ---------- */
+function step(){
+  const head=G.segs[G.segs.length-1];
+  const nc=(head.col+1)%COLS, nr=G.targetRow;
+  if(G.food && G.food.col===nc && G.food.row===nr){
+    G.growing+=1; G.score++; G.flash=1; buzz(22);
+    G.speed=Math.min(14, 6+G.score*0.35);
+    placeFood();
+    if(G.score>=5) ensureObstacles();
+  }
+  const hit=G.obstacles.findIndex(o=>o.col===nc && o.row===nr);
+  if(hit>=0){
+    G.hurt=1; buzz(120);
+    G.obstacles.splice(hit,1);
+    G.segs.splice(0,3);
+    if(G.segs.length<2){ gameOver(); return; }
+    ensureObstacles();
+  }
+  G.segs.push({col:nc,row:nr});
+  if(G.growing>0) G.growing--; else G.segs.shift();
+  if(G.segs.length>60) G.segs.shift();
+}
+
+function update(dt){
+  if(!G.over && !G.paused){
+    G.t+=dt;
+    G.vrow += (G.targetRow-G.vrow)*Math.min(1,dt*16);
+    const spd=G.speed*(G.sprint?1.8:1);
+    G.acc += dt*spd;
+    let guard=0;
+    while(G.acc>=1 && guard++<8){ G.acc-=1; step(); if(G.over) break; }
+    if(G.sprint){
+      G.sprintDrain+=dt;
+      if(G.sprintDrain>=0.5){ G.sprintDrain-=0.5; if(G.segs.length>4) G.segs.shift(); }
+    }
+  }
+  G.flash=Math.max(0,G.flash-dt*4);
+  G.hurt=Math.max(0,G.hurt-dt*2.2);
+}
+
+/* ---------- 绘制 ---------- */
+function rr(x,y,w,h,r){
+  ctx.beginPath();
+  if(ctx.roundRect) ctx.roundRect(x,y,w,h,r); else ctx.rect(x,y,w,h);
+  ctx.fill();
+}
+function draw(){
+  ctx.fillStyle='#08080c'; ctx.fillRect(0,0,W,H);
+  // 食物
+  if(G.food){
+    const cx=G.food.col*CW+CW/2, cy=G.food.row*CH+CH/2;
+    const pulse=1+0.12*Math.sin(G.t*8);
+    ctx.fillStyle='#ffd54a';
+    ctx.beginPath(); ctx.arc(cx,cy,CH*0.22*pulse,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,213,74,.16)';
+    ctx.beginPath(); ctx.arc(cx,cy,CH*0.36*pulse,0,Math.PI*2); ctx.fill();
+  }
+  // 障碍
+  for(const o of G.obstacles){
+    ctx.fillStyle='#ff4d5e';
+    rr(o.col*CW+4, o.row*CH+4, CW-8, CH-8, 6);
+  }
+  // 蛇
+  const n=G.segs.length;
+  for(let i=0;i<n;i++){
+    const s=G.segs[i];
+    let x=s.col*CW + G.acc*CW;
+    if(x>W) x-=W;
+    let y=s.row*CH;
+    if(i===n-1) y += (G.vrow-s.row)*CH;
+    const isHead=(i===n-1);
+    const k=i/Math.max(1,n-1);
+    ctx.fillStyle=isHead?'#4ff0c0':(k>0.66?'#2fd6a8':(k>0.33?'#22b890':'#189a7a'));
+    rr(x+2.5, y+2.5, CW-5, CH-5, 7);
+    if(isHead){
+      ctx.fillStyle='#06120f';
+      const ex=x+CW*0.62, ey=y+CH*0.42;
+      ctx.beginPath(); ctx.arc(ex,ey,3.2,0,Math.PI*2); ctx.fill();
+    }
+  }
+  // 顶部 HUD
+  ctx.fillStyle='#e8e8f0';
+  ctx.font='600 34px system-ui,sans-serif'; ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillText(String(G.score),24,18);
+  ctx.font='500 17px system-ui,sans-serif'; ctx.fillStyle='#6d6d7a';
+  ctx.fillText('BEST '+G.best,24,58);
+  ctx.textAlign='right';
+  ctx.fillStyle='#8a8a99';
+  ctx.fillText('速度 '+ (G.speed*(G.sprint?1.8:1)).toFixed(1)+' 格/秒',W-24,22);
+  ctx.fillText('长度 '+G.segs.length,W-24,46);
+  if(G.sprint){ ctx.fillStyle='#ffd54a'; ctx.fillText('冲刺',W-24,70); }
+  // 控制量指示
+  const bw=180, bh=6, bx=W/2-bw/2, by=H-22;
+  ctx.fillStyle='#1a1a22'; rr(bx,by,bw,bh,3);
+  const u=G.u;
+  ctx.fillStyle='#4ff0c0';
+  const w=Math.abs(u)*bw/2;
+  rr(u>=0?bx+bw/2:bx+bw/2-w, by, Math.max(3,w), bh, 3);
+  // 闪效
+  if(G.flash>0){ ctx.fillStyle='rgba(255,255,255,'+(G.flash*0.16)+')'; ctx.fillRect(0,0,W,H); }
+  if(G.hurt>0){ ctx.fillStyle='rgba(255,60,80,'+(G.hurt*0.22)+')'; ctx.fillRect(0,0,W,H); }
+  // 覆盖层
+  if(G.paused && !G.over) overlay('已暂停','双击屏幕继续');
+  if(G.over) overlay('撞碎了','得分 '+G.score+'  ·  点击重新开始');
+  if(!G.t) overlay('贪吃蛇 · 轨道版','上下滑动换轨道');
+}
+function overlay(title,sub){
+  ctx.fillStyle='rgba(4,4,8,.72)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#f2f2f8'; ctx.font='700 52px system-ui,sans-serif';
+  ctx.fillText(title,W/2,H/2-24);
+  ctx.fillStyle='#8a8a99'; ctx.font='500 22px system-ui,sans-serif';
+  ctx.fillText(sub,W/2,H/2+40);
+}
+
+/* ---------- 输入层（拖拽；将来换成陀螺仪只改 readU） ---------- */
+const ptr={down:false,lastY:0,accum:0,startT:0,moved:false,lastTap:0};
+function toCanvas(e){
+  const r=cv.getBoundingClientRect();
+  return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height};
+}
+function rowToU(){ return clamp((G.targetRow-6)/6,-1,1); }
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+  if(G.over){ reset(); return; }
+  ptr.down=true; ptr.moved=false; ptr.accum=0; ptr.startT=performance.now();
+  ptr.lastY=toCanvas(e).y;
+});
+cv.addEventListener('pointermove',e=>{
+  if(!ptr.down) return;
+  e.preventDefault();
+  const y=toCanvas(e).y;
+  ptr.accum += y-ptr.lastY; ptr.lastY=y;
+  if(Math.abs(ptr.accum)>30){
+    G.targetRow=clamp(G.targetRow+(ptr.accum<0?-1:1),0,ROWS-1);
+    ptr.accum=0; ptr.moved=true; buzz(8);
+  }
+  G.u=rowToU();
+});
+function endPointer(e){
+  if(!ptr.down) return;
+  ptr.down=false; G.sprint=false;
+  const dur=performance.now()-ptr.startT;
+  if(!ptr.moved && dur<220){
+    const now=performance.now();
+    if(now-ptr.lastTap<340){ G.paused=!G.paused; ptr.lastTap=0; buzz(14); }
+    else ptr.lastTap=now;
+  }
+  G.u=0;
+}
+cv.addEventListener('pointerup',endPointer);
+cv.addEventListener('pointercancel',endPointer);
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+
+/* ---------- 主循环 ---------- */
+let last=performance.now(), acc=0;
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  // 长按冲刺
+  G.sprint = ptr.down && !ptr.moved && (now-ptr.startT>300) && G.segs.length>4;
+  if(ptr.down) G.u=rowToU();
+  acc+=dt;
+  const STEP=1/60;
+  let guard=0;
+  while(acc>=STEP && guard++<4){ update(STEP); acc-=STEP; }
+  draw();
+  requestAnimationFrame(loop);
+}
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

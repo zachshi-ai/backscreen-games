@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#08080c">
+<title>背屏跳跳</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;user-select:none;
+    font-family:system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+  body{display:flex;align-items:center;justify-content:center;height:100dvh}
+  .frame{position:relative;width:min(98vw,calc(97vh * 1.6376));aspect-ratio:976/596;
+    border-radius:16px;overflow:hidden;box-shadow:0 0 0 1px #1b1b22,0 12px 40px rgba(0,0,0,.8)}
+  canvas{display:block;width:100%;height:100%}
+  a.back{position:absolute;left:10px;top:8px;color:#6d6d7a;font-size:13px;text-decoration:none;
+    padding:6px 10px;border-radius:8px;background:rgba(0,0,0,.45)}
+  a.back:active{background:rgba(255,255,255,.12)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <canvas id="c" width="976" height="596"></canvas>
+  <a class="back" href="index.html">返回</a>
+</div>
+<script>
+(function(){
+"use strict";
+const W=976,H=596;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+function buzz(ms){ if(navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
+
+const PW=64, PH=64, GRAV0=1900, JUMP=-980, PW_PLAT=160, PLAT_H=16;
+
+let G;
+function makePlat(y, forcedX){
+  const isSpring=Math.random()<0.13;
+  return {x: forcedX!==undefined?forcedX : 40+Math.random()*(W-PW_PLAT-80),
+          y, w:PW_PLAT, h:PLAT_H, spring:isSpring, used:false};
+}
+function reset(){
+  const baseY=540;
+  G={
+    camY:0, player:{x:W/2-PW/2, y:baseY-PH, vx:0, vy:0},
+    plats:[{x:-60, y:baseY, w:W+120, h:PLAT_H, spring:false, used:false}],
+    metres:0, startY:baseY-PH, bestM:+(localStorage.getItem('jump_best')||0),
+    lives:3, grav:GRAV0, flash:0, shake:0, over:false, paused:false,
+    u:0, started:false, t:0, combo:0
+  };
+  G.camY=G.player.y-380;
+  extendUp();
+}
+function extendUp(){
+  while(true){
+    let top=Infinity;
+    for(const p of G.plats) if(p.y<top) top=p.y;
+    if(top < G.camY-320) break;
+    const jumpH=(JUMP*JUMP)/(2*G.grav);
+    const maxGap=jumpH*0.55;
+    const gap=Math.min(maxGap, 90+Math.random()*(maxGap-90));
+    G.plats.push(makePlat(top-gap-Math.random()*20));
+  }
+}
+function loseLife(){
+  G.lives--; G.shake=0.8; buzz(110);
+  if(G.lives<=0){ gameOver(); return; }
+  // 重生成落脚点
+  G.plats.push({x:clamp(G.player.x,20,W-PW_PLAT-20), y:G.camY+470, w:PW_PLAT, h:PLAT_H, spring:false, used:false});
+  G.player.y=G.camY+470-PH-2; G.player.vy=-600; G.player.vx=0;
+  extendUp();
+}
+function gameOver(){
+  G.over=true;
+  const m=Math.floor(G.metres);
+  if(m>G.bestM){ G.bestM=m; localStorage.setItem('jump_best',String(m)); }
+  buzz(240);
+}
+
+function update(dt){
+  if(G.over||G.paused) return;
+  const p=G.player;
+  G.t+=dt;
+  if(G.started) G.metres=Math.max(G.metres,(G.startY-p.y)/10);
+  G.grav=Math.min(GRAV0*1.6, GRAV0*(1+Math.floor(G.metres/500)*0.06));
+
+  // 横向
+  const targetVx=G.u*470;
+  p.vx += (targetVx-p.vx)*Math.min(1,dt*11);
+  p.x += p.vx*dt;
+  if(p.x<8){ p.x=8; p.vx=-p.vx*0.8; buzz(8); }
+  if(p.x+PW>W-8){ p.x=W-8-PW; p.vx=-p.vx*0.8; buzz(8); }
+
+  // 纵向
+  const prevBottom=p.y+PH;
+  p.vy += G.grav*dt;
+  p.y += p.vy*dt;
+  const nowBottom=p.y+PH;
+
+  if(p.vy>0){
+    for(const pl of G.plats){
+      if(prevBottom<=pl.y+2 && nowBottom>=pl.y && p.x+PW-6>pl.x && p.x+6<pl.x+pl.w){
+        p.y=pl.y-PH; 
+        let v=JUMP;
+        if(pl.spring && !pl.used){ v=JUMP*1.65; pl.used=true; G.flash=1; buzz(30); }
+        else if(pl.spring){ v=JUMP*1.3; }
+        p.vy=v;
+        if(pl.spring) G.flash=Math.max(G.flash,0.9);
+        break;
+      }
+    }
+  }
+
+  // 相机只向上
+  if(p.y-380 < G.camY) G.camY = p.y-380;
+
+  // 平台回收 / 生成
+  G.plats=G.plats.filter(pl=>pl.y < G.camY+H+160);
+  extendUp();
+
+  // 掉出屏幕
+  if(p.y-G.camY>H+40) loseLife();
+
+  G.flash=Math.max(0,G.flash-dt*3.2);
+  G.shake=Math.max(0,G.shake-dt*2.6);
+}
+
+function rr(x,y,w,h,r){ ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x,y,w,h,r); else ctx.rect(x,y,w,h); ctx.fill(); }
+function draw(){
+  ctx.fillStyle='#08080c'; ctx.fillRect(0,0,W,H);
+  ctx.save();
+  ctx.translate((Math.random()-0.5)*G.shake*8,(Math.random()-0.5)*G.shake*8);
+
+  // 背景层格线（轻微，省电）
+  ctx.strokeStyle='rgba(255,255,255,.035)'; ctx.lineWidth=1;
+  const off=(-G.camY)%60;
+  for(let y=off;y<H;y+=60){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  for(const pl of G.plats){
+    const sy=pl.y-G.camY;
+    if(sy>H+40||sy<-60) continue;
+    ctx.fillStyle=pl.spring?'#ffd54a':'#3a3a4a';
+    rr(pl.x, sy, pl.w, pl.h, 8);
+    if(pl.spring){ ctx.fillStyle='rgba(255,213,74,.28)'; rr(pl.x+pl.w*0.28, sy-10, pl.w*0.44, 10, 4); }
+  }
+
+  const p=G.player, sy=p.y-G.camY;
+  // 影子
+  ctx.fillStyle='rgba(79,240,192,.12)';
+  ctx.beginPath(); ctx.ellipse(p.x+PW/2, sy+PH+8, PW*0.34, 8, 0, 0, Math.PI*2); ctx.fill();
+  // 身体
+  ctx.fillStyle='#4ff0c0'; rr(p.x, sy, PW, PH, 18);
+  ctx.fillStyle='#06120f';
+  ctx.beginPath(); ctx.arc(p.x+PW*0.36, sy+PH*0.38, 6, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(p.x+PW*0.64, sy+PH*0.38, 6, 0, Math.PI*2); ctx.fill();
+  // 嘴（随水平速度歪）
+  ctx.strokeStyle='#06120f'; ctx.lineWidth=3; ctx.beginPath();
+  ctx.moveTo(p.x+PW*0.34, sy+PH*0.66);
+  ctx.quadraticCurveTo(p.x+PW*0.5, sy+PH*0.66+clamp(p.vx/60,-4,4)*2, p.x+PW*0.66, sy+PH*0.66);
+  ctx.stroke();
+  ctx.restore();
+
+  // HUD
+  ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillStyle='#e8e8f0'; ctx.font='600 34px system-ui,sans-serif';
+  ctx.fillText(Math.floor(G.metres)+' m',24,16);
+  ctx.font='500 17px system-ui,sans-serif'; ctx.fillStyle='#6d6d7a';
+  ctx.fillText('BEST '+G.bestM+' m',24,56);
+  ctx.textAlign='right'; ctx.fillStyle='#8a8a99';
+  ctx.fillText('难度 ×'+ (G.grav/GRAV0).toFixed(2), W-24, 20);
+  for(let i=0;i<G.lives;i++){ ctx.fillStyle='#ff5470'; ctx.beginPath(); ctx.arc(W-32-i*26,H-30,7,0,Math.PI*2); ctx.fill(); }
+
+  const bw=180,bh=6,bx=W/2-bw/2,by=H-22;
+  ctx.fillStyle='#1a1a22'; rr(bx,by,bw,bh,3);
+  const w=Math.abs(G.u)*bw/2;
+  ctx.fillStyle='#4ff0c0'; rr(G.u>=0?bx+bw/2:bx+bw/2-w, by, Math.max(3,w), bh, 3);
+
+  if(G.flash>0){ ctx.fillStyle='rgba(255,255,255,'+(G.flash*0.16)+')'; ctx.fillRect(0,0,W,H); }
+  if(!G.started && !G.over){
+    ctx.textAlign='center'; ctx.fillStyle='#8a8a99'; ctx.font='500 22px system-ui,sans-serif';
+    ctx.fillText('按住屏幕左右拖动 → 自动弹跳，别掉下去', W/2, H/2+30);
+  }
+  if(G.paused && !G.over) overlay('已暂停','双击屏幕继续');
+  if(G.over) overlay('掉下去了','高度 '+Math.floor(G.metres)+' m  ·  点击重新开始');
+}
+function overlay(title,sub){
+  ctx.fillStyle='rgba(4,4,8,.74)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#f2f2f8'; ctx.font='700 52px system-ui,sans-serif';
+  ctx.fillText(title,W/2,H/2-24);
+  ctx.fillStyle='#8a8a99'; ctx.font='500 22px system-ui,sans-serif';
+  ctx.fillText(sub,W/2,H/2+40);
+}
+
+/* ---------- 输入 ---------- */
+const ptr={down:false,anchorX:0,lastTap:0,moved:false,startT:0};
+function toCanvas(e){ const r=cv.getBoundingClientRect(); return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height}; }
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+  if(G.over){ reset(); return; }
+  G.started=true;
+  ptr.down=true; ptr.moved=false; ptr.startT=performance.now();
+  ptr.anchorX=toCanvas(e).x;
+});
+cv.addEventListener('pointermove',e=>{
+  if(!ptr.down) return;
+  e.preventDefault();
+  const dx=toCanvas(e).x-ptr.anchorX;
+  G.u=clamp(dx/(W*0.22),-1,1);
+  if(Math.abs(dx)>12) ptr.moved=true;
+  // 拖动过远时锚点跟随，避免顶到边
+  if(Math.abs(dx)>W*0.30) ptr.anchorX=toCanvas(e).x-Math.sign(dx)*W*0.30;
+});
+function endPointer(e){
+  if(!ptr.down) return;
+  ptr.down=false; G.u=0;
+  const dur=performance.now()-ptr.startT;
+  if(!ptr.moved && dur<220){
+    const now=performance.now();
+    if(now-ptr.lastTap<340){ G.paused=!G.paused; ptr.lastTap=0; buzz(14); }
+    else ptr.lastTap=now;
+  }
+}
+cv.addEventListener('pointerup',endPointer);
+cv.addEventListener('pointercancel',endPointer);
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+
+/* ---------- 主循环 ---------- */
+let last=performance.now(), accum=0;
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  accum+=dt;
+  const STEP=1/120; let guard=0;
+  while(accum>=STEP && guard++<8){ update(STEP); accum-=STEP; }
+  draw();
+  requestAnimationFrame(loop);
+}
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
