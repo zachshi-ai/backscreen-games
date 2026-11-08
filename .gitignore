@@ -1,5 +1,10 @@
-*.apk
+build/
 *.idsig
 *.jks
 *.keystore
+.DS_Store
+
+*.apk
+*.idsig
 build/
+*.keystore
